@@ -2,65 +2,73 @@
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <string>
 #include <vector>
-// Мы будем использовать простую логику без тяжелых JSON либ для начала,
-// или подключим nlohmann/json через CMake (см. ниже).
-#include <nlohmann/json.hpp>
 
+// Подключаем JSON (библиотека скачается сама через CMake)
+#include <nlohmann/json.hpp>
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
+// Структура мода
 struct Mod {
     std::string name;
-    std::string version;
-    std::string entryDll;
-    std::vector<std::string> dependencies;
+    std::string dllPath;
 };
 
 std::vector<Mod> loadedMods;
 
+// Показываем ошибку (можно убрать в релизе)
 void ShowError(const std::string& msg) {
-    MessageBoxA(NULL, msg.c_str(), "PvZ Mod Loader Error", MB_ICONERROR);
+    MessageBoxA(NULL, msg.c_str(), "PvZ Mod Loader", MB_ICONERROR);
 }
 
 void LoadMods() {
+    // Пауза, чтобы игра успела инициализировать свои окна (не обязательно, но полезно)
+    Sleep(500); 
+
     std::string modsPath = "./mods";
+    
+    // Если папки нет - создаем и выходим
     if (!fs::exists(modsPath)) {
-        fs::create_directory(modsPath);
-        return; // Модов нет
+        try {
+            fs::create_directory(modsPath);
+        } catch (...) {}
+        return;
     }
 
-    // 1. Сканируем папки
+    // Перебираем папки внутри /mods/
     for (const auto& entry : fs::directory_iterator(modsPath)) {
         if (entry.is_directory()) {
-            std::string modJsonPath = entry.path().string() + "/mod.json";
-            if (fs::exists(modJsonPath)) {
+            // Ищем mod.json
+            fs::path jsonPath = entry.path() / "mod.json";
+            
+            if (fs::exists(jsonPath)) {
                 try {
-                    std::ifstream f(modJsonPath);
+                    std::ifstream f(jsonPath);
                     json data = json::parse(f);
 
-                    Mod newMod;
-                    newMod.name = data["name"];
-                    newMod.entryDll = entry.path().string() + "/" + std::string(data["dll"]);
+                    // Получаем имя DLL из конфига
+                    std::string dllName = data.value("dll", "");
+                    if (dllName.empty()) continue; // Если DLL не указана, пропускаем
+
+                    // Собираем полный путь к DLL мода
+                    fs::path dllFullPath = entry.path() / dllName;
+                    std::string strPath = dllFullPath.string();
+
+                    // Загружаем DLL мода
+                    HMODULE hMod = LoadLibraryA(strPath.c_str());
                     
-                    if (data.contains("dependencies")) {
-                        for (auto& dep : data["dependencies"]) {
-                            newMod.dependencies.push_back(dep);
-                        }
-                    }
-                    
-                    // Тут надо бы проверить зависимости...
-                    // Для простоты грузим сразу:
-                    HMODULE hMod = LoadLibraryA(newMod.entryDll.c_str());
-                    if (!hMod) {
-                        ShowError("Failed to load DLL for mod: " + newMod.name);
+                    if (hMod) {
+                        // Успех!
+                        std::string modName = data.value("name", "Unknown Mod");
+                        loadedMods.push_back({modName, strPath});
                     } else {
-                        loadedMods.push_back(newMod);
+                        ShowError("Could not load DLL: " + strPath);
                     }
 
                 } catch (const std::exception& e) {
-                    ShowError("Error parsing mod.json in " + entry.path().string() + "\n" + e.what());
+                    ShowError("Error loading mod in " + entry.path().string() + ":\n" + e.what());
                 }
             }
         }
