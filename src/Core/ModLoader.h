@@ -1,7 +1,11 @@
 #pragma once
 #include <string>
-#include <vector>
 
-// Заголовочный файл для нашего ядра
+// Инициализация консоли и системы логов
+void InitLogging();
+
+// Главная функция для записи сообщений
+void Log(const std::string& msg);
+
+// Загрузка модов
 void LoadMods();
-void ShowError(const std::string& msg); 
