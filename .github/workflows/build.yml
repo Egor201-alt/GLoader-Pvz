@@ -8,10 +8,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    - name: Configure CMake (Force 32-bit)
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -A Win32
 
     - name: Build
       run: cmake --build build --config Release
@@ -19,7 +19,7 @@ jobs:
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: PvZ-Mod-Kit
+        name: PvZ-Mod-Kit-x86
         path: |
           build/Release/version.dll
           build/Release/PvZ_Core.dll

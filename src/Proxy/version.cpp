@@ -20,10 +20,10 @@ void LoadCore() {
 // Точка входа в DLL
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        // Отключаем уведомления о потоках для оптимизации
+        // ТЕСТОВОЕ ОКНО
+        MessageBoxA(NULL, "PvZ Mod Loader: Injected!", "It Works!", MB_OK);
+
         DisableThreadLibraryCalls(hModule);
-        
-        // Загружаем ядро
         LoadCore();
     }
     return TRUE;
