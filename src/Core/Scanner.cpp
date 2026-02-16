@@ -1,6 +1,7 @@
 #include "Scanner.h"
 #include <vector>
 #include <sstream>
+#include <string>
 
 uintptr_t Scanner::FindPattern(const char* pattern) {
     uintptr_t moduleBase = (uintptr_t)GetModuleHandleA(NULL);
@@ -11,9 +12,13 @@ uintptr_t Scanner::FindPattern(const char* pattern) {
     std::vector<int> patternBytes;
     std::stringstream ss(pattern);
     std::string temp;
+
     while (ss >> temp) {
-        if (temp == "?" || temp == "??") patternBytes.push_back(-1);
-        else patternBytes.push_back(std::stoi(temp, nullptr, 16));
+        if (temp == "?" || temp == "??") {
+            patternBytes.push_back(-1);
+        } else {
+            patternBytes.push_back(std::stoi(temp, nullptr, 16));
+        }
     }
 
     uint8_t* scanBytes = (uint8_t*)moduleBase;
@@ -22,7 +27,7 @@ uintptr_t Scanner::FindPattern(const char* pattern) {
     for (size_t i = 0; i < size - s; i++) {
         bool found = true;
         for (size_t j = 0; j < s; j++) {
-            if (patternBytes[j] != -1 && scanBytes[i + j] != patternBytes[j]) {
+            if (patternBytes[j] != -1 && scanBytes[i + j] != (uint8_t)patternBytes[j]) {
                 found = false;
                 break;
             }
