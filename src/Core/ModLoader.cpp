@@ -8,6 +8,7 @@
 #include <ctime>
 #include <vector>
 #include <iomanip>
+#include <map>
 
 // JSON library
 #include <nlohmann/json.hpp>
@@ -17,6 +18,7 @@ namespace fs = std::filesystem;
 // Глобальные переменные
 std::ofstream logFile;
 PvZ_Interface g_PvZ_API; // Наше созданное API для модов
+std::map<std::string, uintptr_t> g_AddressDB; // База найденных адресов
 
 struct Mod {
     std::string name;
@@ -64,34 +66,75 @@ void InitLogging() {
     Log("Logger initialized successfully.");
 }
 
+// --- УТИЛИТЫ ДЛЯ ПРАВКИ ПАМЯТИ (Для автономности модов) ---
+
+void API_WriteMemory(uintptr_t address, void* value, size_t size) {
+    if (!address) return;
+    DWORD oldProtect;
+    VirtualProtect((LPVOID)address, size, PAGE_EXECUTE_READWRITE, &oldProtect);
+    memcpy((LPVOID)address, value, size);
+    VirtualProtect((LPVOID)address, size, oldProtect, &oldProtect);
+}
+
+void API_ReadMemory(uintptr_t address, void* buffer, size_t size) {
+    if (!address || !buffer) return;
+    memcpy(buffer, (LPVOID)address, size);
+}
+
+uintptr_t API_GetAddress(const char* name) {
+    if (g_AddressDB.count(name)) {
+        return g_AddressDB[name];
+    }
+    return 0;
+}
+
 // --- ИНИЦИАЛИЗАЦИЯ API (Поиск функций игры) ---
 
 void InitAPI() {
     Log("Initializing API and Scanning Signatures...");
 
-    // Привязываем функцию лога, чтобы моды могли писать в нашу консоль
+    // 1. Настраиваем системную часть API
     g_PvZ_API.Log = [](const char* m) {
         Log(std::string("[Mod] ") + m);
     };
+    g_PvZ_API.WriteMemory = API_WriteMemory;
+    g_PvZ_API.ReadMemory = API_ReadMemory;
+    g_PvZ_API.GetAddress = API_GetAddress;
 
-    // 1. Ищем AddSun (Функция изменения солнца)
-    // Сигнатура для PvZ GOTY
-    uintptr_t addrAddSun = Scanner::FindPattern("55 8B EC 81 EC ? ? ? ? 53 56 57 8B F1 8B 46 04");
-    if (addrAddSun) {
-        g_PvZ_API.AddSun = (void(*)(void*, int))addrAddSun;
-        Log("  -> API: Found 'AddSun' function.");
+    // 2. Загружаем внешние сигнатуры из файла signatures.json (Автономность!)
+    if (fs::exists("signatures.json")) {
+        Log("Loading signatures from signatures.json...");
+        try {
+            std::ifstream f("signatures.json");
+            json data = json::parse(f);
+
+            for (auto& [name, pattern] : data.items()) {
+                std::string pStr = pattern.get<std::string>();
+                uintptr_t addr = Scanner::FindPattern(pStr.c_str());
+                if (addr) {
+                    g_AddressDB[name] = addr;
+                    Log("  -> Signature [" + name + "] found at 0x" + std::to_string(addr));
+                } else {
+                    Log("  -> Signature [" + name + "] NOT FOUND!");
+                }
+            }
+        } catch (const std::exception& e) {
+            Log("  -> Critical error parsing signatures.json: " + std::string(e.what()));
+        }
     } else {
-        Log("  -> API ERROR: Failed to find 'AddSun' signature!");
+        Log("signatures.json not found. Using built-in fallback signatures...");
+        
+        // Встроенные сигнатуры на случай отсутствия файла
+        uintptr_t addrAddSun = Scanner::FindPattern("55 8B EC 81 EC ? ? ? ? 53 56 57 8B F1 8B 46 04");
+        if (addrAddSun) g_AddressDB["AddSun"] = addrAddSun;
+
+        uintptr_t addrGiveMoney = Scanner::FindPattern("55 8B EC 53 8B 5D 08 56 8B F1 85 DB 7E ? 8B 86 ? ? ? ?");
+        if (addrGiveMoney) g_AddressDB["GiveMoney"] = addrGiveMoney;
     }
 
-    // 2. Ищем GiveMoney (Функция добавления монет)
-    uintptr_t addrGiveMoney = Scanner::FindPattern("55 8B EC 53 8B 5D 08 56 8B F1 85 DB 7E ? 8B 86 ? ? ? ?");
-    if (addrGiveMoney) {
-        g_PvZ_API.GiveMoney = (void(*)(void*, int))addrGiveMoney;
-        Log("  -> API: Found 'GiveMoney' function.");
-    } else {
-        Log("  -> API ERROR: Failed to find 'GiveMoney' signature!");
-    }
+    // 3. Привязываем найденные адреса к фиксированным функциям API
+    g_PvZ_API.AddSun = (void(*)(void*, int))g_AddressDB["AddSun"];
+    g_PvZ_API.GiveMoney = (void(*)(void*, int))g_AddressDB["GiveMoney"];
 
     Log("API setup complete.");
 }
@@ -118,6 +161,7 @@ void LoadMods() {
             std::string modDirName = entry.path().filename().string();
             fs::path jsonPath = entry.path() / "mod.json";
 
+            // Безопасный блок try-catch, чтобы один плохой мод не крашнул всю игру
             try {
                 if (!fs::exists(jsonPath)) {
                     continue;
