@@ -1,4 +1,6 @@
 #include "ModLoader.h"
+#include "Scanner.h"
+#include "PvZ_API.h"
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +16,8 @@ namespace fs = std::filesystem;
 
 // Глобальные переменные
 std::ofstream logFile;
+PvZ_Interface g_PvZ_API; // Наше созданное API для модов
+
 struct Mod {
     std::string name;
     std::string version;
@@ -21,31 +25,6 @@ struct Mod {
 std::vector<Mod> loadedMods;
 
 // --- СИСТЕМА ЛОГИРОВАНИЯ ---
-
-void InitLogging() {
-    // 1. Создаем папку logs, если нет
-    if (!fs::exists("./logs")) {
-        fs::create_directory("./logs");
-    }
-
-    // 2. Открываем (или создаем) файл logs/latest.log
-    // ios::trunc означает, что при каждом запуске игры лог очищается
-    logFile.open("./logs/latest.log", std::ios::out | std::ios::trunc);
-
-    // 3. Создаем консольное окно (черное)
-    AllocConsole();
-    
-    // 4. Перенаправляем вывод std::cout в это окно
-    FILE* fDummy;
-    freopen_s(&fDummy, "CONOUT$", "w", stdout);
-    freopen_s(&fDummy, "CONOUT$", "w", stderr);
-
-    // Приветствие
-    std::cout << "==========================================" << std::endl;
-    std::cout << "      GLoader Core Initialized     " << std::endl;
-    std::cout << "==========================================" << std::endl;
-    Log("Logger initialized successfully.");
-}
 
 void Log(const std::string& msg) {
     // Получаем текущее время
@@ -63,13 +42,66 @@ void Log(const std::string& msg) {
     // 2. Вывод в файл (если открыт)
     if (logFile.is_open()) {
         logFile << timeBuffer << msg << std::endl;
-        logFile.flush(); // Сразу сохраняем на диск
+        logFile.flush(); 
     }
+}
+
+void InitLogging() {
+    if (!fs::exists("./logs")) {
+        fs::create_directory("./logs");
+    }
+
+    logFile.open("./logs/latest.log", std::ios::out | std::ios::trunc);
+
+    AllocConsole();
+    FILE* fDummy;
+    freopen_s(&fDummy, "CONOUT$", "w", stdout);
+    freopen_s(&fDummy, "CONOUT$", "w", stderr);
+
+    std::cout << "==========================================" << std::endl;
+    std::cout << "      GLoader Core Initialized            " << std::endl;
+    std::cout << "==========================================" << std::endl;
+    Log("Logger initialized successfully.");
+}
+
+// --- ИНИЦИАЛИЗАЦИЯ API (Поиск функций игры) ---
+
+void InitAPI() {
+    Log("Initializing API and Scanning Signatures...");
+
+    // Привязываем функцию лога, чтобы моды могли писать в нашу консоль
+    g_PvZ_API.Log = [](const char* m) {
+        Log(std::string("[Mod] ") + m);
+    };
+
+    // 1. Ищем AddSun (Функция изменения солнца)
+    // Сигнатура для PvZ GOTY
+    uintptr_t addrAddSun = Scanner::FindPattern("55 8B EC 81 EC ? ? ? ? 53 56 57 8B F1 8B 46 04");
+    if (addrAddSun) {
+        g_PvZ_API.AddSun = (void(*)(void*, int))addrAddSun;
+        Log("  -> API: Found 'AddSun' function.");
+    } else {
+        Log("  -> API ERROR: Failed to find 'AddSun' signature!");
+    }
+
+    // 2. Ищем GiveMoney (Функция добавления монет)
+    uintptr_t addrGiveMoney = Scanner::FindPattern("55 8B EC 53 8B 5D 08 56 8B F1 85 DB 7E ? 8B 86 ? ? ? ?");
+    if (addrGiveMoney) {
+        g_PvZ_API.GiveMoney = (void(*)(void*, int))addrGiveMoney;
+        Log("  -> API: Found 'GiveMoney' function.");
+    } else {
+        Log("  -> API ERROR: Failed to find 'GiveMoney' signature!");
+    }
+
+    Log("API setup complete.");
 }
 
 // --- ЗАГРУЗЧИК МОДОВ ---
 
 void LoadMods() {
+    // Шаг 1: Подготавливаем API перед загрузкой модов
+    InitAPI();
+
     Log("Scanning for mods in ./mods/ directory...");
 
     std::string modsPath = "./mods";
@@ -86,10 +118,8 @@ void LoadMods() {
             std::string modDirName = entry.path().filename().string();
             fs::path jsonPath = entry.path() / "mod.json";
 
-            // Безопасный блок try-catch, чтобы один плохой мод не крашнул всю игру
             try {
                 if (!fs::exists(jsonPath)) {
-                    // Log("Skipping folder " + modDirName + " (no mod.json found).");
                     continue;
                 }
 
@@ -106,7 +136,6 @@ void LoadMods() {
                     continue;
                 }
 
-                // Полный путь к DLL
                 fs::path dllFullPath = entry.path() / dllName;
                 
                 if (!fs::exists(dllFullPath)) {
@@ -114,15 +143,24 @@ void LoadMods() {
                      continue;
                 }
 
-                // Попытка загрузки DLL
+                // Загружаем DLL мода
                 HMODULE hMod = LoadLibraryA(dllFullPath.string().c_str());
                 
                 if (hMod) {
-                    Log("  -> Loaded successfully!");
+                    // Ищем в моде функцию InitializeMod
+                    ModInit_t initFunc = (ModInit_t)GetProcAddress(hMod, "InitializeMod");
+                    
+                    if (initFunc) {
+                        // Передаем указатель на наше API в мод
+                        initFunc(&g_PvZ_API);
+                        Log("  -> Loaded and initialized with API!");
+                    } else {
+                        Log("  -> Loaded, but no 'InitializeMod' function found (Generic DLL).");
+                    }
+
                     loadedMods.push_back({modName, data.value("version", "1.0")});
                     successCount++;
                 } else {
-                    // Получаем код ошибки Windows
                     DWORD err = GetLastError();
                     Log("  -> CRITICAL: Failed to load DLL. Error code: " + std::to_string(err));
                 }
@@ -137,6 +175,8 @@ void LoadMods() {
         }
     }
 
+    Log("------------------------------------------");
     Log("Mod loading finished.");
     Log("Total active mods: " + std::to_string(successCount));
+    Log("------------------------------------------");
 }

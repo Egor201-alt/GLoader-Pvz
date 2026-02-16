@@ -18,7 +18,7 @@ FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download
 FetchContent_MakeAvailable(json)
 
 # --- ЯДРО ---
-add_library(PvZ_Core SHARED src/Core/dllmain.cpp src/Core/ModLoader.cpp)
+add_library(PvZ_Core SHARED src/Core/dllmain.cpp src/Core/ModLoader.cpp src/Core/Scanner.cpp) 
 target_link_libraries(PvZ_Core PRIVATE nlohmann_json::nlohmann_json)
 set_target_properties(PvZ_Core PROPERTIES PREFIX "") 
 
