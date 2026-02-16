@@ -1,0 +1,25 @@
+name: Build PvZ Mod Loader
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: PvZ-Mod-Kit
+        path: |
+          build/Release/version.dll
+          build/Release/PvZ_Core.dll
